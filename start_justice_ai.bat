@@ -1,15 +1,22 @@
 @echo off
 title JusticeAI Launcher
-echo Starting JusticeAI System...
-
-echo Starting Backend Server (FastAPI)...
-start "JusticeAI Backend" cmd /k "cd backend && call venv\Scripts\activate.bat && uvicorn main:app --reload"
-
-echo Starting Frontend Server (Vite/React)...
-start "JusticeAI Frontend" cmd /k "cd frontend && npm run dev"
+echo ==============================================
+echo       Starting JusticeAI Container Stack      
+echo ==============================================
+echo.
+echo Bringing up the microservices (Postgres, Neo4j, Redis, API, UI)...
+docker compose up -d
 
 echo.
-echo Both services have been launched in separate windows!
-echo Once the frontend server is ready, it usually runs on http://localhost:5173
+echo Waiting for services to initialize...
+timeout /t 5 /nobreak > NUL
+
+echo.
+echo JusticeAI is now running!
+echo The Frontend Dashboard is available at: http://localhost:5173
+echo The Backend API is available at: http://localhost:8000
+echo.
+echo To view live logs, run: docker compose logs -f
+echo To stop the system, run: docker compose down
 echo.
 pause
