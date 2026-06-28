@@ -1,13 +1,15 @@
 import logging
 from neo4j import AsyncGraphDatabase
 
+import os
+
 logger = logging.getLogger(__name__)
 
 class KnowledgeGraph:
-    def __init__(self, uri="bolt://localhost:7687", user="neo4j", password="justiceai123"):
+    def __init__(self, uri="bolt://localhost:7687", user="neo4j", password=None):
         self.uri = uri
         self.user = user
-        self.password = password
+        self.password = password or os.getenv("NEO4J_PASSWORD")
         self.driver = None
 
     async def connect(self):
