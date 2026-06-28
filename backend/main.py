@@ -8,7 +8,7 @@ from typing import List, Optional, Any
 
 from backend.config import settings
 from backend.api.models.base import engine, Base, SessionLocal
-from backend.api.models.schema import Case, Analysis, Citation
+from backend.api.models.schema import Case, Analysis, Citation, Challenge
 from backend.engine.reasoning_pipeline import ReasoningPipeline
 
 # Setup structured logging
@@ -62,6 +62,10 @@ class AnalysisResponseModel(BaseModel):
     full_reasoning_chain: str
     citations: List[Any] = []
 
+class ChallengeSubmitRequest(BaseModel):
+    layer_challenged: int
+    challenge_text: str
+
 @app.post("/api/v1/analyze", response_model=AnalysisResponseModel)
 async def analyze_case_endpoint(request: CaseSubmitRequest, db: Session = Depends(get_db)):
     logger.info("Received analysis request v2.")
@@ -69,8 +73,26 @@ async def analyze_case_endpoint(request: CaseSubmitRequest, db: Session = Depend
         # Convert request to dict for pipeline
         case_dict = request.model_dump()
         
+        # Fetch historical Agentic Memory (past challenges for this crime/jurisdiction)
+        past_cases = db.query(Case).filter(
+            (Case.crime_type == request.crime_type) | (Case.jurisdiction == request.jurisdiction)
+        ).all()
+        past_case_ids = [c.id for c in past_cases]
+        
+        historical_challenges = []
+        if past_case_ids:
+            past_analyses = db.query(Analysis).filter(Analysis.case_id.in_(past_case_ids)).all()
+            past_analysis_ids = [a.id for a in past_analyses]
+            if past_analysis_ids:
+                challenges = db.query(Challenge).filter(Challenge.analysis_id.in_(past_analysis_ids)).all()
+                for ch in challenges:
+                    historical_challenges.append({
+                        "layer": ch.layer_challenged,
+                        "text": ch.challenge_text
+                    })
+        
         # Run Reasoning Pipeline
-        parsed_result = await pipeline.analyze(case_dict)
+        parsed_result = await pipeline.analyze(case_dict, historical_challenges)
         
         # Save Case to DB
         db_case = Case(
@@ -157,6 +179,19 @@ async def get_case_history(db: Session = Depends(get_db)):
             "confidence": analysis.confidence_score if analysis else 0
         })
     return res
+
+@app.post("/api/v1/analyses/{analysis_id}/challenge")
+async def submit_challenge(analysis_id: str, request: ChallengeSubmitRequest, db: Session = Depends(get_db)):
+    logger.info(f"Received Agentic Memory Challenge for analysis {analysis_id}")
+    db_challenge = Challenge(
+        analysis_id=analysis_id,
+        layer_challenged=request.layer_challenged,
+        challenge_text=request.challenge_text,
+        status="open"
+    )
+    db.add(db_challenge)
+    db.commit()
+    return {"status": "success", "message": "Challenge added to Agentic Memory"}
 
 if __name__ == "__main__":
     import uvicorn

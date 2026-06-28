@@ -38,6 +38,8 @@ function App() {
   const [history, setHistory] = useState<CaseHistory[]>([]);
   const [error, setError] = useState('');
   const [expandedLayer, setExpandedLayer] = useState<string | null>('layer1_result');
+  const [challengeText, setChallengeText] = useState('');
+  const [submittingChallenge, setSubmittingChallenge] = useState<string | null>(null);
 
   useEffect(() => {
     fetchHistory();
@@ -90,6 +92,30 @@ function App() {
     }
   };
 
+  const handleChallenge = async (layerKey: string, layerNum: int) => {
+    if (!analysis || !challengeText) return;
+    
+    setSubmittingChallenge(layerKey);
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/analyses/${analysis.id}/challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          layer_challenged: layerNum,
+          challenge_text: challengeText
+        })
+      });
+      if (res.ok) {
+        alert("Challenge submitted! The Agentic Memory has been updated.");
+        setChallengeText('');
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setSubmittingChallenge(null);
+    }
+  };
+
   const getVerdictColor = (verdict: string) => {
     switch(verdict) {
       case 'CONSISTENT': return 'text-emerald-400 border-emerald-400/30 bg-emerald-400/10';
@@ -107,6 +133,7 @@ function App() {
     if (!layer) return null;
     
     const isExpanded = expandedLayer === key;
+    const layerNum = parseInt(key.replace('layer', '').replace('_result', ''));
     
     return (
       <div className="border border-slate-700/50 rounded-lg mb-4 bg-slate-800/30 overflow-hidden">
@@ -116,7 +143,7 @@ function App() {
         >
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
-              {key.replace('layer', '').replace('_result', '')}
+              {layerNum}
             </div>
             <h3 className="font-semibold text-lg">{title}</h3>
           </div>
@@ -131,7 +158,27 @@ function App() {
                 {layer.status || (layer.bias_detected !== undefined ? (layer.bias_detected ? 'BIAS DETECTED' : 'NO BIAS') : 'EVALUATED')}
               </div>
             </div>
-            <p className="text-slate-300 leading-relaxed">{layer.finding}</p>
+            <p className="text-slate-300 leading-relaxed mb-4">{layer.finding}</p>
+            
+            <div className="mt-4 p-3 bg-slate-900/50 border border-indigo-500/20 rounded-md">
+              <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-2 block">Agentic Memory (Challenge Error)</span>
+              <div className="flex gap-2">
+                <input 
+                  type="text"
+                  value={expandedLayer === key ? challengeText : ''}
+                  onChange={e => setChallengeText(e.target.value)}
+                  placeholder="Spot an error? Explain it here to update the AI's future memory..."
+                  className="flex-1 bg-slate-800 border border-slate-700 rounded p-2 text-xs focus:border-indigo-500 focus:outline-none"
+                />
+                <button 
+                  onClick={() => handleChallenge(key, layerNum)}
+                  disabled={submittingChallenge === key || !challengeText}
+                  className="bg-indigo-600/80 hover:bg-indigo-500 text-xs px-3 rounded text-white font-medium"
+                >
+                  {submittingChallenge === key ? 'Saving...' : 'Challenge'}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

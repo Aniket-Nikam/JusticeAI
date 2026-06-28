@@ -44,10 +44,13 @@ class SwarmReasoningPipeline:
             logger.error(f"Sub-agent {layer_id} failed: {e}")
             return {f"layer{layer_id}_result": {"status": "ERROR", "finding": str(e)}, "citations": []}
 
-    async def analyze(self, case_dict: dict) -> dict:
+    async def analyze(self, case_dict: dict, historical_challenges: list = None) -> dict:
         """
-        Runs the Multi-Agent Swarm pipeline.
+        Runs the Multi-Agent Swarm pipeline with Agentic Memory injection.
         """
+        if historical_challenges is None:
+            historical_challenges = []
+            
         logger.info(f"Starting Multi-Agent Swarm for case: {case_dict.get('crime_type')}")
         
         counts = case_dict.get("counts", [])
@@ -57,7 +60,19 @@ class SwarmReasoningPipeline:
         sentencing_calc = calculate_sentencing_range(counts, case_dict.get("jurisdiction", "Unknown"))
         prefetched = await self.prefetcher.prefetch_all(case_dict)
         
+        # Build memory block
+        memory_block = "None"
+        if historical_challenges:
+            memory_block = ""
+            for i, ch in enumerate(historical_challenges):
+                memory_block += f"PAST MISTAKE {i+1} (Layer {ch.get('layer', 'Any')}): {ch.get('text', '')}\n"
+        
         user_message = f"""
+        <AGENTIC_MEMORY>
+        The following are PAST MISTAKES you have made on similar cases. You are FORBIDDEN from repeating them:
+        {memory_block}
+        </AGENTIC_MEMORY>
+
         CASE DATA:
         {json.dumps(case_dict, indent=2)}
 
