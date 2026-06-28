@@ -59,4 +59,5 @@ websockets==16.0
 
 pdfplumber==0.11.4
 duckduckgo-search==6.2.4
+neo4j==5.27.0
 

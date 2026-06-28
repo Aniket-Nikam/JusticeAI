@@ -17,7 +17,9 @@ def test_perfect_score():
     }
     result = calculate_confidence(analysis)
     assert result["score"] == 100
-    assert "perfect_score" in result["breakdown"]
+    assert result["breakdown"]["legal_compliance"] == 100
+    assert result["breakdown"]["precedent_match"] == 100
+    assert result["breakdown"]["absence_of_bias"] == 100
 
 def test_missing_statute():
     analysis = {
@@ -33,8 +35,8 @@ def test_missing_statute():
         }
     }
     result = calculate_confidence(analysis)
-    assert result["score"] == 80
-    assert result["breakdown"]["missing_statute_citation"] == -20
+    assert result["score"] == 91
+    assert result["breakdown"]["legal_compliance"] == 75
 
 def test_media_only_sources():
     analysis = {
@@ -51,15 +53,7 @@ def test_media_only_sources():
     }
     result = calculate_confidence(analysis)
     
-    # Base: 100
-    # Missing statute (News media report doesn't match 'statute' or 'code'): -20
-    # Missing sentencing: -15
-    # Fewer than 5 juris: -15
-    # No behavioral: -10
-    # Missing profile: -10
-    # Media only: -15
-    # Total deductions: -85 -> Score 15, but floored at 20.
-    
-    assert result["score"] == 20
-    assert result["breakdown"]["media_only_sources"] == -15
-    assert result["breakdown"]["missing_statute_citation"] == -20
+    assert result["score"] == 48
+    assert result["breakdown"]["legal_compliance"] == 40
+    assert result["breakdown"]["precedent_match"] == 50
+    assert result["breakdown"]["absence_of_bias"] == 55
