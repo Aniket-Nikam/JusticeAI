@@ -58,6 +58,25 @@ class DataPreFetcher:
         return self._format_results(results, "Behavioral Psychology Journal")
 
     async def fetch_bias_studies(self, jurisdiction: str, crime_type: str) -> list[dict]:
+        from .knowledge_graph import KnowledgeGraph
+        kg = KnowledgeGraph()
+        
+        try:
+            records = await kg.find_precedents(crime_type, jurisdiction)
+            if records:
+                formatted = []
+                for r in records:
+                    formatted.append({
+                        "source_type": "Neo4j Graph Database (Historical Precedent)",
+                        "title": f"Precedent Case {r['case_id']}",
+                        "url": "neo4j://local-graph",
+                        "content": f"Judge: {r['judge']} (Bias Score: {r['bias']}). Actual sentence: {r['months']} months."
+                    })
+                return formatted
+        except Exception as e:
+            logger.error(f"Neo4j RAG failed: {e}")
+            
+        # Fallback to DuckDuckGo if graph has no data
         query = f"racial socioeconomic sentencing disparity bias study {jurisdiction} {crime_type}"
         results = await self._search(query)
         return self._format_results(results, "Criminology Bias Study")
