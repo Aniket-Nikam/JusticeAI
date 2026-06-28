@@ -1,6 +1,7 @@
 import asyncio
 from duckduckgo_search import AsyncDDGS
 import logging
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -8,20 +9,32 @@ class DataPreFetcher:
     def __init__(self):
         self.max_results = 3
 
-    async def _search(self, query: str) -> list[dict]:
-        """Helper to run async duckduckgo search and format results."""
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    async def _search_with_retry(self, query: str) -> list[dict]:
         results = []
-        try:
-            async with AsyncDDGS() as ddgs:
-                async for r in ddgs.text(query, max_results=self.max_results):
-                    results.append({
-                        "title": r.get("title"),
-                        "url": r.get("href"),
-                        "snippet": r.get("body")
-                    })
-        except Exception as e:
-            logger.error(f"Search failed for query '{query}': {e}")
+        async with AsyncDDGS() as ddgs:
+            async for r in ddgs.text(query, max_results=self.max_results):
+                results.append({
+                    "title": r.get("title"),
+                    "url": r.get("href"),
+                    "snippet": r.get("body")
+                })
+        if not results:
+            # Force retry if duckduckgo returns empty due to silent rate limiting
+            raise Exception("DuckDuckGo returned empty results")
         return results
+
+    async def _search(self, query: str) -> list[dict]:
+        """Helper to run async duckduckgo search and format results with fallback."""
+        try:
+            return await self._search_with_retry(query)
+        except Exception as e:
+            logger.error(f"Search failed completely for query '{query}': {e}. Using fallback.")
+            return [{
+                "title": "Data Unavailable (Rate Limited)",
+                "url": "N/A",
+                "snippet": "Live web data is temporarily unavailable due to search engine rate limits. Please rely on your internal baseline models to estimate this data."
+            }]
 
     def _format_results(self, results: list[dict], source_type: str) -> list[dict]:
         """Formats raw search results for the prompt builder."""

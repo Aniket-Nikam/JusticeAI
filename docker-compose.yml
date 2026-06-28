@@ -30,6 +30,32 @@ services:
       - neo4j_data:/data
     restart: always
 
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://justice:justicepassword@db:5432/justiceai
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+    depends_on:
+      - db
+      - neo4j
+      - redis
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    restart: always
+
 volumes:
   postgres_data:
   neo4j_data:
