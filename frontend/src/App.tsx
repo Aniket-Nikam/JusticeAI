@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { Scale, AlertCircle, Loader2, History, Trash2, CheckCircle, ShieldAlert, BarChart3, ChevronDown, ChevronUp } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Scale, ShieldAlert, History, Activity, FileText, UploadCloud, FileSignature, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, AlertCircle, Loader2, Trash2, BarChart3 } from 'lucide-react';
+import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer as RadarResponsiveContainer } from 'recharts';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 
 interface CaseHistory {
-  id: str;
+  id: string;
   jurisdiction: string;
   crime_type: string;
   submitted_at: string;
@@ -16,6 +17,11 @@ interface AnalysisResult {
   case_id: string;
   verdict_classification: string;
   confidence_score: number;
+  confidence_breakdown?: {
+    legal_compliance: number;
+    precedent_match: number;
+    absence_of_bias: number;
+  };
   recommended_range_min_months: number;
   recommended_range_max_months: number;
   summary: string;
@@ -40,6 +46,8 @@ function App() {
   const [expandedLayer, setExpandedLayer] = useState<string | null>('layer1_result');
   const [challengeText, setChallengeText] = useState('');
   const [submittingChallenge, setSubmittingChallenge] = useState<string | null>(null);
+  const [uploadingPdf, setUploadingPdf] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetchHistory();
@@ -73,7 +81,7 @@ function App() {
           crime_type: crimeType,
           defendant_profile: profile,
           description,
-          counts: [] // Simplified for MVP form
+          counts: [] 
         })
       });
       
@@ -92,7 +100,7 @@ function App() {
     }
   };
 
-  const handleChallenge = async (layerKey: string, layerNum: int) => {
+  const handleChallenge = async (layerKey: string, layerNum: number) => {
     if (!analysis || !challengeText) return;
     
     setSubmittingChallenge(layerKey);
@@ -113,6 +121,37 @@ function App() {
       console.error(err);
     } finally {
       setSubmittingChallenge(null);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadingPdf(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/extract-case-pdf', {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) throw new Error("Failed to extract PDF");
+      const data = await res.json();
+      
+      setDescription(data.description || description);
+      setJurisdiction(data.jurisdiction || jurisdiction);
+      setCrimeType(data.crime_type || crimeType);
+      setProfile(data.defendant_profile || profile);
+      
+      alert("PDF successfully extracted and form auto-filled!");
+    } catch (err) {
+      console.error(err);
+      alert("Error extracting PDF.");
+    } finally {
+      setUploadingPdf(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -188,7 +227,6 @@ function App() {
   return (
     <div className="min-h-screen bg-[#0a0f1c] text-slate-200 font-sans flex">
       
-      {/* Sidebar */}
       <div className="w-80 bg-slate-900/80 border-r border-slate-800 p-6 flex flex-col h-screen overflow-y-auto shrink-0">
         <div className="flex items-center gap-3 mb-8">
           <Scale className="text-indigo-400" size={32} />
@@ -222,64 +260,8 @@ function App() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col h-screen overflow-hidden">
         
-        {/* Top Navbar / Form Header */}
-        <div className="bg-slate-900/50 border-b border-slate-800 p-6 shadow-sm backdrop-blur-sm z-10">
-          <form onSubmit={handleSubmit} className="max-w-6xl mx-auto">
-            <div className="grid grid-cols-3 gap-4 mb-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Jurisdiction</label>
-                <input 
-                  type="text" 
-                  value={jurisdiction}
-                  onChange={e => setJurisdiction(e.target.value)}
-                  placeholder="e.g. California, Federal" 
-                  className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Crime Type</label>
-                <input 
-                  type="text" 
-                  value={crimeType}
-                  onChange={e => setCrimeType(e.target.value)}
-                  placeholder="e.g. Sexual Assault" 
-                  className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Defendant Profile</label>
-                <input 
-                  type="text" 
-                  value={profile}
-                  onChange={e => setProfile(e.target.value)}
-                  placeholder="e.g. 19yo male, no prior record" 
-                  className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all outline-none"
-                />
-              </div>
-            </div>
-            
-            <div className="flex gap-4">
-              <textarea 
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                placeholder="Paste the factual case description and actual sentence here..." 
-                className="flex-1 bg-slate-800 border border-slate-700 rounded-md p-3 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all outline-none resize-none h-14 custom-scrollbar"
-              ></textarea>
-              <button 
-                type="submit" 
-                disabled={loading || !description}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:text-slate-500 text-white px-6 rounded-md font-medium transition-colors flex items-center justify-center min-w-[140px]"
-              >
-                {loading ? <Loader2 className="animate-spin" size={20} /> : 'Analyze Case'}
-              </button>
-            </div>
-          </form>
-        </div>
-        
-        {/* Results Area */}
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
           <div className="max-w-6xl mx-auto">
             {error && (
@@ -290,17 +272,58 @@ function App() {
             )}
             
             {!analysis && !loading && !error && (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 mt-20">
-                <Scale size={64} className="mb-4 opacity-20" />
-                <h2 className="text-xl font-medium mb-2">Ready for Analysis</h2>
-                <p className="max-w-md text-center">Enter the case details above. JusticeAI will automatically fetch live statutes and precedents before generating a verdict.</p>
+              <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50 backdrop-blur-xl">
+                <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
+                  <FileSignature className="text-indigo-400" />
+                  Case Parameters
+                </h2>
+
+                <div 
+                  className="border-2 border-dashed border-slate-600 rounded-lg p-6 mb-8 text-center hover:border-indigo-500 hover:bg-slate-700/20 transition-all cursor-pointer"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input 
+                    type="file" 
+                    accept=".pdf" 
+                    className="hidden" 
+                    ref={fileInputRef}
+                    onChange={handleFileUpload}
+                  />
+                  <UploadCloud className="mx-auto h-12 w-12 text-slate-400 mb-3" />
+                  <h3 className="text-lg font-medium text-slate-200">
+                    {uploadingPdf ? "Extracting Court Document..." : "Upload Court Document (PDF)"}
+                  </h3>
+                  <p className="text-sm text-slate-400 mt-1">
+                    Auto-fill case details using AI Optical Character Recognition
+                  </p>
+                </div>
+
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Jurisdiction</label>
+                      <input type="text" value={jurisdiction} onChange={e => setJurisdiction(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Crime Type</label>
+                      <input type="text" value={crimeType} onChange={e => setCrimeType(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 mb-1">Defendant Profile</label>
+                      <input type="text" value={profile} onChange={e => setProfile(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm" />
+                    </div>
+                  </div>
+                  <textarea value={description} onChange={e => setDescription(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-3 text-sm h-32" placeholder="Case details..."></textarea>
+                  <button type="submit" className="w-full bg-indigo-600 py-3 rounded-md font-medium text-white hover:bg-indigo-500 flex justify-center">
+                    {loading ? <Loader2 className="animate-spin" /> : 'Analyze Case'}
+                  </button>
+                </form>
               </div>
             )}
             
             {analysis && (
               <div className="animate-fade-in pb-20">
                 
-                {/* Hero Stats */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                   <div className={`col-span-2 p-6 rounded-xl border ${getVerdictColor(analysis.verdict_classification)} flex flex-col justify-center relative overflow-hidden group`}>
                     <div className="absolute top-0 right-0 p-4 opacity-10 scale-150 transform transition-transform group-hover:scale-[2]">
@@ -310,23 +333,30 @@ function App() {
                     <h2 className="text-4xl font-black tracking-tight">{analysis.verdict_classification}</h2>
                   </div>
                   
-                  <div className="p-6 rounded-xl border border-indigo-500/30 bg-indigo-500/10 flex flex-col items-center justify-center">
-                    <span className="text-sm font-bold uppercase tracking-widest text-indigo-400 mb-2">Confidence Score</span>
-                    <div className="flex items-baseline gap-1">
-                      <h2 className="text-5xl font-black text-indigo-300">{analysis.confidence_score}</h2>
-                      <span className="text-indigo-500/50 font-bold">/100</span>
+                  {analysis.confidence_breakdown && (
+                    <div className="bg-slate-900/50 rounded-lg p-4 h-64 border border-slate-700/50 flex justify-center">
+                      <RadarResponsiveContainer width="100%" height="100%">
+                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={[
+                          { subject: 'Legal Compliance', A: analysis.confidence_breakdown.legal_compliance, fullMark: 100 },
+                          { subject: 'Precedent Match', A: analysis.confidence_breakdown.precedent_match, fullMark: 100 },
+                          { subject: 'Absence of Bias', A: analysis.confidence_breakdown.absence_of_bias, fullMark: 100 }
+                        ]}>
+                          <PolarGrid stroke="#334155" />
+                          <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                          <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
+                          <Radar name="Confidence" dataKey="A" stroke="#818cf8" fill="#6366f1" fillOpacity={0.6} />
+                        </RadarChart>
+                      </RadarResponsiveContainer>
                     </div>
-                  </div>
+                  )}
                 </div>
                 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-                  {/* Left Column: Layers */}
                   <div className="xl:col-span-2">
                     <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                       <ShieldAlert className="text-indigo-400" size={20} />
                       Reasoning Layers
                     </h2>
-                    
                     {renderLayer('layer1_result', 'Legal Compliance')}
                     {renderLayer('layer2_result', 'Sentencing Consistency')}
                     {renderLayer('layer3_result', 'Factor Analysis & Bias')}
@@ -339,14 +369,12 @@ function App() {
                     </div>
                   </div>
                   
-                  {/* Right Column: Data & Citations */}
                   <div className="space-y-8">
                     <div className="p-6 bg-slate-800/30 border border-slate-700/50 rounded-xl">
                       <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                         <BarChart3 className="text-indigo-400" size={20} />
                         Sentence Bounds
                       </h3>
-                      
                       <div className="h-[200px] w-full">
                         <ResponsiveContainer width="100%" height="100%">
                           <BarChart data={[
@@ -369,7 +397,6 @@ function App() {
                           </BarChart>
                         </ResponsiveContainer>
                       </div>
-                      <p className="text-xs text-center text-slate-500 mt-2">Recommended Range (Months)</p>
                     </div>
                     
                     <div className="p-6 bg-slate-800/30 border border-slate-700/50 rounded-xl">

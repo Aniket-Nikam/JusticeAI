@@ -1,10 +1,12 @@
 import logging
 import json
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
+import pdfplumber
+import os
 
 from backend.config import settings
 from backend.api.models.base import engine, Base, SessionLocal
@@ -192,6 +194,49 @@ async def submit_challenge(analysis_id: str, request: ChallengeSubmitRequest, db
     db.add(db_challenge)
     db.commit()
     return {"status": "success", "message": "Challenge added to Agentic Memory"}
+
+@app.post("/api/v1/extract-case-pdf")
+async def extract_case_pdf(file: UploadFile = File(...)):
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+        
+    try:
+        with pdfplumber.open(file.file) as pdf:
+            text = ""
+            for page in pdf.pages:
+                text += page.extract_text() + "\n"
+                
+        # Use Groq to extract structured data
+        client = AsyncGroq(api_key=os.getenv("GROQ_API_KEY"))
+        prompt = f"""
+        Extract the following case details from this raw court transcript OCR text.
+        Return ONLY valid JSON. If a detail is missing, guess logically or leave empty.
+        
+        REQUIRED JSON SCHEMA:
+        {{
+            "description": "Short 2 sentence summary of the case facts",
+            "jurisdiction": "The state or country, e.g. 'California'",
+            "crime_type": "The primary offense, e.g. 'Theft' or 'Assault'",
+            "defendant_profile": "Age, mental health, socio-economic status if mentioned"
+        }}
+        
+        OCR TEXT:
+        {text[:8000]}
+        """
+        
+        completion = await client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"}
+        )
+        
+        raw_out = completion.choices[0].message.content
+        return json.loads(raw_out.replace("```json", "").replace("```", "").strip())
+        
+    except Exception as e:
+        logger.error(f"PDF Extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
