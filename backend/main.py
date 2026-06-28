@@ -1,14 +1,14 @@
 import logging
 import json
-from fastapi import FastAPI, HTTPException, Depends, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import List, Optional, Any
+from typing import List, Any, Optional
 import pdfplumber
 import os
+from groq import AsyncGroq
 
-from backend.config import settings
 from backend.api.models.base import engine, Base, SessionLocal
 from backend.api.models.schema import Case, Analysis, Citation, Challenge
 from backend.engine.reasoning_pipeline import ReasoningPipeline
@@ -27,6 +27,9 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# Ensure SQLite database tables are created
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="JusticeAI API v2")
 
@@ -62,6 +65,7 @@ class AnalysisResponseModel(BaseModel):
     layer4_result: Any
     layer5_result: Any
     full_reasoning_chain: str
+    confidence_breakdown: Optional[dict] = None
     citations: List[Any] = []
 
 class ChallengeSubmitRequest(BaseModel):
@@ -156,6 +160,7 @@ async def analyze_case_endpoint(request: CaseSubmitRequest, db: Session = Depend
             "layer4_result": db_analysis.layer4_result,
             "layer5_result": db_analysis.layer5_result,
             "full_reasoning_chain": db_analysis.full_reasoning_chain,
+            "confidence_breakdown": db_analysis.confidence_breakdown,
             "citations": citations
         }
         return response_data
@@ -176,11 +181,57 @@ async def get_case_history(db: Session = Depends(get_db)):
             "id": c.id,
             "crime_type": c.crime_type,
             "jurisdiction": c.jurisdiction,
+            "crime_description": c.crime_description,
             "submitted_at": c.submitted_at.isoformat(),
             "verdict": analysis.verdict_classification if analysis else "N/A",
             "confidence": analysis.confidence_score if analysis else 0
         })
     return res
+
+@app.get("/api/v1/cases/{case_id}/analysis", response_model=AnalysisResponseModel)
+async def get_case_analysis(case_id: str, db: Session = Depends(get_db)):
+    analysis = db.query(Analysis).filter(Analysis.case_id == case_id).first()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    
+    citations = db.query(Citation).filter(Citation.analysis_id == analysis.id).all()
+    
+    response_data = {
+        "id": analysis.id,
+        "case_id": analysis.case_id,
+        "verdict_classification": analysis.verdict_classification,
+        "confidence_score": analysis.confidence_score,
+        "recommended_range_min_months": analysis.recommended_range_min_months,
+        "recommended_range_max_months": analysis.recommended_range_max_months,
+        "summary": analysis.summary,
+        "layer1_result": analysis.layer1_result,
+        "layer2_result": analysis.layer2_result,
+        "layer3_result": analysis.layer3_result,
+        "layer4_result": analysis.layer4_result,
+        "layer5_result": analysis.layer5_result,
+        "full_reasoning_chain": analysis.full_reasoning_chain,
+        "confidence_breakdown": analysis.confidence_breakdown,
+        "citations": [
+            {
+                "layer": cit.layer,
+                "source_url": cit.source_url,
+                "source_title": cit.source_title,
+                "source_type": cit.source_type,
+                "excerpt": cit.excerpt
+            } for cit in citations
+        ]
+    }
+    return response_data
+
+@app.delete("/api/v1/cases/{case_id}")
+async def delete_case(case_id: str, db: Session = Depends(get_db)):
+    case = db.query(Case).filter(Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    db.delete(case)
+    db.commit()
+    return {"status": "success", "message": "Case and analysis deleted successfully"}
+
 
 @app.post("/api/v1/analyses/{analysis_id}/challenge")
 async def submit_challenge(analysis_id: str, request: ChallengeSubmitRequest, db: Session = Depends(get_db)):

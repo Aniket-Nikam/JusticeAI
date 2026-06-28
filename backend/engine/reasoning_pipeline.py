@@ -137,7 +137,8 @@ class SwarmReasoningPipeline:
         
         try:
             orchestrator_output = json.loads(completion.choices[0].message.content.replace("```json", "").replace("```", "").strip())
-        except:
+        except Exception as e:
+            logger.error(f"Failed to parse orchestrator output: {e}")
             orchestrator_output = {
                 "verdict_classification": "ANOMALOUS",
                 "recommended_range_min_months": sentencing_calc.get("cumulative_min", 0),

@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Scale, ShieldAlert, History, Activity, FileText, UploadCloud, FileSignature, AlertTriangle, CheckCircle, ChevronDown, ChevronUp, AlertCircle, Loader2, Trash2, BarChart3 } from 'lucide-react';
+import { Scale, ShieldAlert, History, UploadCloud, FileSignature, ChevronDown, ChevronUp, AlertCircle, Trash2, BarChart3, ArrowLeft, Activity, Gavel, ChevronRight, BookOpen, Download, Printer } from 'lucide-react';
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer as RadarResponsiveContainer } from 'recharts';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 
 interface CaseHistory {
   id: string;
   jurisdiction: string;
   crime_type: string;
+  crime_description?: string;
   submitted_at: string;
   verdict: string;
   confidence: number;
@@ -40,6 +41,11 @@ function App() {
   const [profile, setProfile] = useState('');
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [dragActive, setDragActive] = useState(false);
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [showOptionalFields, setShowOptionalFields] = useState(false);
+  
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [history, setHistory] = useState<CaseHistory[]>([]);
   const [error, setError] = useState('');
@@ -48,6 +54,16 @@ function App() {
   const [submittingChallenge, setSubmittingChallenge] = useState<string | null>(null);
   const [uploadingPdf, setUploadingPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const loadingStepsText = [
+    "Initializing multi-layer reasoning pipeline...",
+    "Layer 1 — Assessing legal compliance guidelines...",
+    "Layer 2 — Evaluating sentencing consistency precedents...",
+    "Layer 3 — Running factor analysis & bias detection...",
+    "Layer 4 — Cross-jurisdictional precedent evaluation...",
+    "Layer 5 — Defendant profile context analysis...",
+    "Compiling executive summary and sentence boundaries..."
+  ];
 
   useEffect(() => {
     fetchHistory();
@@ -67,19 +83,26 @@ function App() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!description || !jurisdiction || !crimeType) return;
+    if (!description) return;
     
     setLoading(true);
+    setLoadingStep(0);
     setError('');
+    setAnalysis(null);
+    setSelectedCaseId(null);
+
+    const timer = setInterval(() => {
+      setLoadingStep(prev => prev < 6 ? prev + 1 : prev);
+    }, 1300);
     
     try {
       const res = await fetch('http://localhost:8000/api/v1/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          jurisdiction,
-          crime_type: crimeType,
-          defendant_profile: profile,
+          jurisdiction: jurisdiction || 'Not specified',
+          crime_type: crimeType || 'Not specified',
+          defendant_profile: profile || 'Not specified',
           description,
           counts: [] 
         })
@@ -96,6 +119,7 @@ function App() {
     } catch (err: any) {
       setError(err.message);
     } finally {
+      clearInterval(timer);
       setLoading(false);
     }
   };
@@ -124,10 +148,7 @@ function App() {
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const uploadPdfFile = async (file: File) => {
     setUploadingPdf(true);
     const formData = new FormData();
     formData.append('file', file);
@@ -144,6 +165,9 @@ function App() {
       setJurisdiction(data.jurisdiction || jurisdiction);
       setCrimeType(data.crime_type || crimeType);
       setProfile(data.defendant_profile || profile);
+      if (data.jurisdiction || data.crime_type || data.defendant_profile) {
+        setShowOptionalFields(true);
+      }
       
       alert("PDF successfully extracted and form auto-filled!");
     } catch (err) {
@@ -151,18 +175,137 @@ function App() {
       alert("Error extracting PDF.");
     } finally {
       setUploadingPdf(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const getVerdictColor = (verdict: string) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadPdfFile(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.type !== "application/pdf" && !file.name.endsWith('.pdf')) {
+        alert("Please upload a PDF file.");
+        return;
+      }
+      await uploadPdfFile(file);
+    }
+  };
+
+  const handleSelectCase = async (caseId: string) => {
+    setSelectedCaseId(caseId);
+    setLoading(true);
+    setError('');
+    setAnalysis(null);
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/cases/${caseId}/analysis`);
+      if (!res.ok) throw new Error("Failed to retrieve analysis.");
+      const data = await res.json();
+      setAnalysis(data);
+      
+      const hItem = history.find(h => h.id === caseId);
+      if (hItem) {
+        setJurisdiction(hItem.jurisdiction);
+        setCrimeType(hItem.crime_type);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteCase = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm("Delete this case and its analysis?")) return;
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/cases/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (analysis && analysis.case_id === id) {
+          setAnalysis(null);
+          setSelectedCaseId(null);
+        }
+        fetchHistory();
+      }
+    } catch (err) {
+      console.error("Failed to delete case", err);
+    }
+  };
+
+  const handleNewAnalysis = () => {
+    setAnalysis(null);
+    setSelectedCaseId(null);
+    setJurisdiction('');
+    setCrimeType('');
+    setProfile('');
+    setDescription('');
+    setError('');
+  };
+
+  const exportToText = () => {
+    if (!analysis) return;
+    const content = `JUSTICE AI - SENTENCING ANALYSIS REPORT
+=======================================
+
+Case Jurisdiction: ${jurisdiction || 'Not specified'}
+Crime Type: ${crimeType || 'Not specified'}
+Defendant Profile: ${profile || 'Not specified'}
+
+CASE DESCRIPTION:
+${description}
+
+VERDICT: ${analysis.verdict_classification}
+CONFIDENCE: ${analysis.confidence_score}%
+RECOMMENDED RANGE: ${analysis.recommended_range_min_months} to ${analysis.recommended_range_max_months} months
+
+SUMMARY:
+${analysis.summary}
+
+REASONING CHAIN:
+${analysis.full_reasoning_chain}
+`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `justiceai-report-${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const getVerdictClass = (verdict: string) => {
     switch(verdict) {
-      case 'CONSISTENT': return 'text-emerald-400 border-emerald-400/30 bg-emerald-400/10';
-      case 'LENIENT': 
-      case 'SIGNIFICANTLY LENIENT': return 'text-amber-400 border-amber-400/30 bg-amber-400/10';
-      case 'HARSH': 
-      case 'SIGNIFICANTLY HARSH': return 'text-rose-400 border-rose-400/30 bg-rose-400/10';
-      default: return 'text-gray-400 border-gray-400/30 bg-gray-400/10';
+      case 'CONSISTENT': return 'verdict-consistent';
+      case 'LENIENT': case 'SIGNIFICANTLY LENIENT': return 'verdict-lenient';
+      case 'HARSH': case 'SIGNIFICANTLY HARSH': return 'verdict-harsh';
+      default: return '';
+    }
+  };
+  
+  const getVerdictBadgeClass = (verdict: string) => {
+    switch(verdict) {
+      case 'CONSISTENT': return 'verdict-consistent-tag';
+      case 'LENIENT': case 'SIGNIFICANTLY LENIENT': return 'verdict-lenient-tag';
+      case 'HARSH': case 'SIGNIFICANTLY HARSH': return 'verdict-harsh-tag';
+      default: return 'verdict-neutral-tag';
     }
   };
 
@@ -173,113 +316,146 @@ function App() {
     
     const isExpanded = expandedLayer === key;
     const layerNum = parseInt(key.replace('layer', '').replace('_result', ''));
+    const statusText = layer.status || (layer.bias_detected !== undefined ? (layer.bias_detected ? 'BIAS DETECTED' : 'NO BIAS') : 'EVALUATED');
     
     return (
-      <div className="border border-slate-700/50 rounded-lg mb-4 bg-slate-800/30 overflow-hidden">
-        <button 
-          onClick={() => setExpandedLayer(isExpanded ? null : key)}
-          className="w-full flex justify-between items-center p-4 hover:bg-slate-700/30 transition-colors"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-indigo-500/20 text-indigo-400 flex items-center justify-center font-bold">
-              {layerNum}
-            </div>
-            <h3 className="font-semibold text-lg">{title}</h3>
-          </div>
-          {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-        </button>
-        
-        {isExpanded && (
-          <div className="p-4 border-t border-slate-700/50 bg-slate-800/50">
-            <div className="mb-3">
-              <span className="text-xs uppercase tracking-wider text-slate-400 font-semibold block mb-1">Status / Finding</span>
-              <div className="inline-block px-3 py-1 rounded-full bg-slate-700 text-sm font-medium mb-2">
-                {layer.status || (layer.bias_detected !== undefined ? (layer.bias_detected ? 'BIAS DETECTED' : 'NO BIAS') : 'EVALUATED')}
+      <div key={key} className={`timeline-item ${isExpanded ? 'expanded' : ''}`}>
+        <div className="timeline-left">
+          <div className="timeline-dot">{layerNum}</div>
+          <div className="timeline-line"></div>
+        </div>
+        <div className="timeline-right">
+          <div className="timeline-card">
+            <button 
+              onClick={() => setExpandedLayer(isExpanded ? null : key)}
+              className="timeline-header-btn"
+            >
+              <div className="timeline-header-info">
+                <span className="timeline-card-title">{title}</span>
+                <span className="timeline-card-status">{statusText}</span>
               </div>
-            </div>
-            <p className="text-slate-300 leading-relaxed mb-4">{layer.finding}</p>
+              {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
             
-            <div className="mt-4 p-3 bg-slate-900/50 border border-indigo-500/20 rounded-md">
-              <span className="text-xs font-bold text-indigo-400 uppercase tracking-wider mb-2 block">Agentic Memory (Challenge Error)</span>
-              <div className="flex gap-2">
-                <input 
-                  type="text"
-                  value={expandedLayer === key ? challengeText : ''}
-                  onChange={e => setChallengeText(e.target.value)}
-                  placeholder="Spot an error? Explain it here to update the AI's future memory..."
-                  className="flex-1 bg-slate-800 border border-slate-700 rounded p-2 text-xs focus:border-indigo-500 focus:outline-none"
-                />
-                <button 
-                  onClick={() => handleChallenge(key, layerNum)}
-                  disabled={submittingChallenge === key || !challengeText}
-                  className="bg-indigo-600/80 hover:bg-indigo-500 text-xs px-3 rounded text-white font-medium"
-                >
-                  {submittingChallenge === key ? 'Saving...' : 'Challenge'}
-                </button>
+            {isExpanded && (
+              <div className="timeline-body">
+                <p className="timeline-finding">{layer.finding}</p>
+                
+                <div className="challenge-box">
+                  <span className="challenge-label">Agentic Memory — Challenge This Finding</span>
+                  <div className="challenge-form-row">
+                    <input 
+                      type="text"
+                      value={challengeText}
+                      onChange={e => setChallengeText(e.target.value)}
+                      placeholder="Spot an error? Override the AI's future reasoning..."
+                      className="challenge-input"
+                    />
+                    <button 
+                      onClick={() => handleChallenge(key, layerNum)}
+                      disabled={submittingChallenge === key || !challengeText}
+                      className="btn-challenge"
+                    >
+                      {submittingChallenge === key ? 'Saving...' : 'Challenge'}
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     );
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0f1c] text-slate-200 font-sans flex">
+    <div className="layout-wrapper">
       
-      <div className="w-80 bg-slate-900/80 border-r border-slate-800 p-6 flex flex-col h-screen overflow-y-auto shrink-0">
-        <div className="flex items-center gap-3 mb-8">
-          <Scale className="text-indigo-400" size={32} />
-          <h1 className="text-2xl font-bold tracking-tight bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-            JusticeAI
-          </h1>
+      {/* ── Sidebar ── */}
+      <div className="sidebar">
+        <div className="sidebar-brand">
+          <Scale className="sidebar-logo" size={24} />
+          <span className="sidebar-title">JusticeAI</span>
         </div>
         
-        <div className="flex items-center gap-2 mb-4 text-slate-400 uppercase text-xs font-bold tracking-wider">
-          <History size={14} />
-          <span>Recent Analyses</span>
+        <div className="sidebar-section-title">
+          <History size={11} />
+          <span>Case History</span>
         </div>
         
-        <div className="flex-1 overflow-y-auto space-y-3 mb-6 pr-2 custom-scrollbar">
+        <div className="history-list custom-scrollbar">
           {history.length === 0 ? (
-            <p className="text-slate-500 text-sm italic">No case history.</p>
+            <p className="sidebar-empty">No cases analyzed yet.</p>
           ) : (
-            history.map((h, i) => (
-              <div key={i} className="p-3 bg-slate-800/50 rounded-lg border border-slate-700/50 hover:border-indigo-500/30 transition-colors cursor-pointer group relative">
-                <div className="flex justify-between items-start mb-1">
-                  <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${getVerdictColor(h.verdict)}`}>
-                    {h.verdict.substring(0, 10)}
+            history.map((h) => (
+              <div 
+                key={h.id} 
+                onClick={() => handleSelectCase(h.id)}
+                className={`history-item ${selectedCaseId === h.id ? 'active' : ''}`}
+              >
+                <div className="history-header">
+                  <span className={`history-badge ${getVerdictBadgeClass(h.verdict)}`}>
+                    {h.verdict.replace('SIGNIFICANTLY ', '')}
                   </span>
-                  <span className="text-xs text-slate-500">{new Date(h.submitted_at).toLocaleDateString()}</span>
+                  <span className="history-date">
+                    {new Date(h.submitted_at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'})}
+                  </span>
                 </div>
-                <h4 className="text-sm font-medium text-slate-300 truncate">{h.crime_type}</h4>
-                <p className="text-xs text-slate-500 truncate">{h.jurisdiction}</p>
+                <div className="history-crime">
+                  {h.crime_type && h.crime_type !== 'Not specified' ? h.crime_type : 'Case Analysis'}
+                </div>
+                <div className="history-jurisdiction">
+                  {h.jurisdiction && h.jurisdiction !== 'Not specified' ? h.jurisdiction : 
+                   (h.crime_description ? (h.crime_description.substring(0, 40) + (h.crime_description.length > 40 ? '...' : '')) : '—')}
+                </div>
+                <button 
+                  className="history-delete-btn"
+                  onClick={(e) => handleDeleteCase(e, h.id)}
+                  title="Delete case"
+                >
+                  <Trash2 size={12} />
+                </button>
               </div>
             ))
           )}
         </div>
       </div>
 
-      <div className="flex-1 flex flex-col h-screen overflow-hidden">
-        
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-          <div className="max-w-6xl mx-auto">
-            {error && (
-              <div className="bg-rose-500/10 border border-rose-500/30 text-rose-400 p-4 rounded-lg flex items-start gap-3 mb-8">
-                <AlertCircle className="shrink-0 mt-0.5" size={20} />
-                <p>{error}</p>
+      {/* ── Main Content ── */}
+      <div className="main-content custom-scrollbar">
+        <div className="app-container">
+          
+          {error && (
+            <div className="toast-alert">
+              <AlertCircle size={16} />
+              <p>{error}</p>
+            </div>
+          )}
+          
+          {/* ── Form View ── */}
+          {!analysis && !loading && (
+            <div className="animate-fade-in">
+              <div className="header">
+                <div className="header-icon">
+                  <Gavel size={24} />
+                </div>
+                <h1>Sentencing Analysis</h1>
+                <p>Paste case facts below or upload a court document. Our multi-agent pipeline evaluates sentencing against statutes, precedents, and bias indicators.</p>
               </div>
-            )}
-            
-            {!analysis && !loading && !error && (
-              <div className="bg-slate-800/50 rounded-xl p-6 border border-slate-700/50 backdrop-blur-xl">
-                <h2 className="text-xl font-semibold mb-6 flex items-center gap-2">
-                  <FileSignature className="text-indigo-400" />
-                  Case Parameters
+              
+              <div className="glass-card">
+                <h2 className="glass-card-title">
+                  <FileSignature size={18} />
+                  New Case Submission
                 </h2>
 
+                {/* Upload zone */}
                 <div 
-                  className="border-2 border-dashed border-slate-600 rounded-lg p-6 mb-8 text-center hover:border-indigo-500 hover:bg-slate-700/20 transition-all cursor-pointer"
+                  className={`upload-zone ${dragActive ? 'drag-active' : ''}`}
+                  onDragEnter={handleDrag}
+                  onDragOver={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDrop={handleDrop}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <input 
@@ -288,142 +464,283 @@ function App() {
                     className="hidden" 
                     ref={fileInputRef}
                     onChange={handleFileUpload}
+                    style={{ display: 'none' }}
                   />
-                  <UploadCloud className="mx-auto h-12 w-12 text-slate-400 mb-3" />
-                  <h3 className="text-lg font-medium text-slate-200">
-                    {uploadingPdf ? "Extracting Court Document..." : "Upload Court Document (PDF)"}
+                  <UploadCloud className="upload-icon" size={32} />
+                  <h3 className="upload-title">
+                    {uploadingPdf ? "Extracting document..." : "Upload Court Document"}
                   </h3>
-                  <p className="text-sm text-slate-400 mt-1">
-                    Auto-fill case details using AI Optical Character Recognition
+                  <p className="upload-subtitle">
+                    Drop a PDF here or click to browse — fields auto-fill via OCR
                   </p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Jurisdiction</label>
-                      <input type="text" value={jurisdiction} onChange={e => setJurisdiction(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Crime Type</label>
-                      <input type="text" value={crimeType} onChange={e => setCrimeType(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 mb-1">Defendant Profile</label>
-                      <input type="text" value={profile} onChange={e => setProfile(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-2.5 text-sm" />
-                    </div>
+                {/* Main Form */}
+                <form onSubmit={handleSubmit}>
+                  {/* Hero: Case Description */}
+                  <div className="form-group">
+                    <label className="form-label">
+                      Case Description & Factual Circumstances
+                    </label>
+                    <textarea 
+                      value={description} 
+                      onChange={e => setDescription(e.target.value)} 
+                      className="form-textarea-hero" 
+                      placeholder={"Describe the case facts, charges, and actual sentence imposed (if known).\n\nExample: \"Defendant, a 22-year-old first-time offender, was convicted of aggravated assault in Los Angeles County Superior Court. The incident involved a bar altercation resulting in a broken jaw. Judge imposed 4 years state prison. Prosecution sought 6 years; defense argued for probation citing no prior record and provocation.\""}
+                      required
+                    ></textarea>
                   </div>
-                  <textarea value={description} onChange={e => setDescription(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-md p-3 text-sm h-32" placeholder="Case details..."></textarea>
-                  <button type="submit" className="w-full bg-indigo-600 py-3 rounded-md font-medium text-white hover:bg-indigo-500 flex justify-center">
-                    {loading ? <Loader2 className="animate-spin" /> : 'Analyze Case'}
+
+                  {/* Optional Fields Toggle */}
+                  <button 
+                    type="button"
+                    className="optional-fields-toggle"
+                    onClick={() => setShowOptionalFields(!showOptionalFields)}
+                  >
+                    <ChevronRight size={13} style={{ transform: showOptionalFields ? 'rotate(90deg)' : 'none' }} />
+                    <span>Additional details (optional)</span>
+                  </button>
+
+                  {showOptionalFields && (
+                    <div className="optional-fields">
+                      <div className="form-group">
+                        <label className="form-label">
+                          Jurisdiction
+                          <span className="form-label-hint">optional</span>
+                        </label>
+                        <input 
+                          type="text" 
+                          value={jurisdiction} 
+                          onChange={e => setJurisdiction(e.target.value)} 
+                          className="form-input" 
+                          placeholder="e.g. California, Federal"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">
+                          Crime Type
+                          <span className="form-label-hint">optional</span>
+                        </label>
+                        <input 
+                          type="text" 
+                          value={crimeType} 
+                          onChange={e => setCrimeType(e.target.value)} 
+                          className="form-input" 
+                          placeholder="e.g. Aggravated Assault"
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label className="form-label">
+                          Defendant Profile
+                          <span className="form-label-hint">optional</span>
+                        </label>
+                        <input 
+                          type="text" 
+                          value={profile} 
+                          onChange={e => setProfile(e.target.value)} 
+                          className="form-input" 
+                          placeholder="e.g. 22yo, no prior record"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  
+                  <button type="submit" className="btn-submit" disabled={!description.trim() || uploadingPdf}>
+                    <Scale size={16} />
+                    Analyze Case
                   </button>
                 </form>
               </div>
-            )}
-            
-            {analysis && (
-              <div className="animate-fade-in pb-20">
+            </div>
+          )}
+
+          {/* ── Loading State ── */}
+          {loading && (
+            <div className="glass-card animate-fade-in">
+              <div className="loading-box">
+                <div className="loading-scales">
+                  <Scale size={64} />
+                </div>
+                <h2 className="loading-box-title">Analyzing Case</h2>
+                <p className="loading-box-desc">
+                  Running multi-agent reasoning pipeline against statutes and precedents...
+                </p>
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                  <div className={`col-span-2 p-6 rounded-xl border ${getVerdictColor(analysis.verdict_classification)} flex flex-col justify-center relative overflow-hidden group`}>
-                    <div className="absolute top-0 right-0 p-4 opacity-10 scale-150 transform transition-transform group-hover:scale-[2]">
-                      <Scale size={100} />
-                    </div>
-                    <span className="text-sm font-bold uppercase tracking-widest opacity-80 mb-2">Verdict Classification</span>
-                    <h2 className="text-4xl font-black tracking-tight">{analysis.verdict_classification}</h2>
+                <div className="loading-steps">
+                  {loadingStepsText.map((text, index) => {
+                    let stepClass = "loading-step";
+                    if (index < loadingStep) stepClass += " completed";
+                    else if (index === loadingStep) stepClass += " active";
+                    
+                    return (
+                      <div key={index} className={stepClass}>
+                        <div className="step-indicator-dot"></div>
+                        <span>{text}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* ── Analysis Results ── */}
+          {analysis && !loading && (
+            <div className="animate-fade-in" style={{ paddingBottom: '3rem' }}>
+              
+              <div className="action-bar no-print">
+                <button onClick={handleNewAnalysis} className="btn-back">
+                  <ArrowLeft size={13} />
+                  <span>New Analysis</span>
+                </button>
+                <div className="export-group">
+                  <button onClick={() => window.print()} className="btn-export">
+                    <Printer size={13} />
+                    <span>Print / PDF</span>
+                  </button>
+                  <button onClick={exportToText} className="btn-export">
+                    <Download size={13} />
+                    <span>Export Text</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Verdict Hero */}
+              <div className={`verdict-banner ${getVerdictClass(analysis.verdict_classification)}`}>
+                <div className="verdict-banner-bg-icon">
+                  <Scale />
+                </div>
+                <div className="verdict-banner-lbl">Verdict Classification</div>
+                <h2 className="verdict-banner-title">{analysis.verdict_classification}</h2>
+                <span className="verdict-banner-confidence">
+                  <Activity size={12} />
+                  Confidence: {analysis.confidence_score}%
+                </span>
+                <p className="verdict-banner-desc">
+                  Classification computed relative to applicable statutes, historical sentencing data, and cross-jurisdictional precedents.
+                </p>
+              </div>
+
+              {/* Charts */}
+              <div className="dashboard-grid">
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    <Activity size={13} />
+                    <span>Confidence Breakdown</span>
                   </div>
-                  
-                  {analysis.confidence_breakdown && (
-                    <div className="bg-slate-900/50 rounded-lg p-4 h-64 border border-slate-700/50 flex justify-center">
+                  {analysis.confidence_breakdown ? (
+                    <div className="chart-container">
                       <RadarResponsiveContainer width="100%" height="100%">
-                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={[
+                        <RadarChart cx="50%" cy="50%" outerRadius="75%" data={[
                           { subject: 'Legal Compliance', A: analysis.confidence_breakdown.legal_compliance, fullMark: 100 },
                           { subject: 'Precedent Match', A: analysis.confidence_breakdown.precedent_match, fullMark: 100 },
                           { subject: 'Absence of Bias', A: analysis.confidence_breakdown.absence_of_bias, fullMark: 100 }
                         ]}>
-                          <PolarGrid stroke="#334155" />
-                          <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 12 }} />
+                          <PolarGrid stroke="rgba(201, 168, 76, 0.08)" />
+                          <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 9, fontWeight: 500 }} />
                           <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                          <Radar name="Confidence" dataKey="A" stroke="#818cf8" fill="#6366f1" fillOpacity={0.6} />
+                          <Radar name="Confidence" dataKey="A" stroke="#c9a84c" fill="#c9a84c" fillOpacity={0.2} />
                         </RadarChart>
                       </RadarResponsiveContainer>
                     </div>
+                  ) : (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: 'auto' }}>No breakdown available.</p>
                   )}
                 </div>
-                
-                <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-                  <div className="xl:col-span-2">
-                    <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-                      <ShieldAlert className="text-indigo-400" size={20} />
-                      Reasoning Layers
-                    </h2>
-                    {renderLayer('layer1_result', 'Legal Compliance')}
-                    {renderLayer('layer2_result', 'Sentencing Consistency')}
-                    {renderLayer('layer3_result', 'Factor Analysis & Bias')}
-                    {renderLayer('layer4_result', 'Cross-Jurisdictional Precedent')}
-                    {renderLayer('layer5_result', 'Defendant Profile Context')}
-                    
-                    <div className="mt-8 p-6 bg-slate-800/30 border border-slate-700/50 rounded-xl">
-                      <h3 className="text-lg font-bold mb-3">AI Executive Summary</h3>
-                      <p className="text-slate-300 leading-relaxed">{analysis.summary}</p>
-                    </div>
+
+                <div className="chart-card">
+                  <div className="chart-card-title">
+                    <BarChart3 size={13} />
+                    <span>Recommended Range (Months & Years)</span>
                   </div>
-                  
-                  <div className="space-y-8">
-                    <div className="p-6 bg-slate-800/30 border border-slate-700/50 rounded-xl">
-                      <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                        <BarChart3 className="text-indigo-400" size={20} />
-                        Sentence Bounds
-                      </h3>
-                      <div className="h-[200px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <BarChart data={[
-                            { name: 'Min', value: analysis.recommended_range_min_months },
-                            { name: 'Max', value: analysis.recommended_range_max_months }
-                          ]} layout="vertical" margin={{ top: 0, right: 20, left: 0, bottom: 0 }}>
-                            <XAxis type="number" />
-                            <YAxis dataKey="name" type="category" width={40} tick={{fill: '#94a3b8'}} />
-                            <Tooltip cursor={{fill: '#1e293b'}} contentStyle={{backgroundColor: '#0f172a', borderColor: '#334155'}} />
-                            <Bar dataKey="value" fill="#6366f1" radius={[0, 4, 4, 0]}>
-                              {
-                                [
-                                  { name: 'Min', value: analysis.recommended_range_min_months },
-                                  { name: 'Max', value: analysis.recommended_range_max_months }
-                                ].map((entry, index) => (
-                                  <Cell key={`cell-${index}`} fill={index === 0 ? '#818cf8' : '#4f46e5'} />
-                                ))
-                              }
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                    
-                    <div className="p-6 bg-slate-800/30 border border-slate-700/50 rounded-xl">
-                      <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                        <CheckCircle className="text-indigo-400" size={20} />
-                        Verified Citations
-                      </h3>
-                      <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
-                        {analysis.citations.map((c, i) => (
-                          <div key={i} className="text-sm border-l-2 border-slate-600 pl-3">
-                            <span className="inline-block px-1.5 py-0.5 bg-slate-700 text-[10px] font-bold rounded text-slate-300 mb-1 mr-2">L{c.layer}</span>
-                            <span className="text-indigo-300 font-medium">{c.source_type}</span>
-                            <a href={c.source_url || '#'} target="_blank" rel="noreferrer" className="block text-slate-400 hover:text-indigo-400 truncate mt-1">
-                              {c.source_title || 'View Source'}
-                            </a>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                  <div className="chart-container">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart 
+                        data={[
+                          { name: 'Minimum', value: analysis.recommended_range_min_months },
+                          { name: 'Maximum', value: analysis.recommended_range_max_months }
+                        ]} 
+                        layout="vertical" 
+                        margin={{ top: 15, right: 15, left: 5, bottom: 5 }}
+                      >
+                        <XAxis type="number" stroke="#334155" tick={{ fill: '#94a3b8', fontSize: 9 }} />
+                        <YAxis dataKey="name" type="category" width={70} stroke="#334155" tick={{ fill: '#94a3b8', fontSize: 9 }} />
+                        <Tooltip 
+                          formatter={(value: number) => [`${value} months (${(value / 12).toFixed(1)} years)`, 'Duration']}
+                          cursor={{ fill: 'rgba(255,255,255,0.01)' }} 
+                          contentStyle={{ backgroundColor: '#0c0e18', borderColor: 'rgba(255,255,255,0.06)', borderRadius: '8px', fontSize: '11px' }} 
+                        />
+                        <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={20}>
+                          <Cell fill="#c9a84c" />
+                          <Cell fill="#a68936" />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
-                
               </div>
-            )}
-          </div>
+
+              {/* Reasoning Layers */}
+              <h3 className="reasoning-section-title">
+                <ShieldAlert size={16} />
+                <span>Reasoning Audit Trail</span>
+              </h3>
+              
+              <div className="timeline">
+                {renderLayer('layer1_result', 'Legal Compliance')}
+                {renderLayer('layer2_result', 'Sentencing Consistency')}
+                {renderLayer('layer3_result', 'Aggravating Factors & Bias')}
+                {renderLayer('layer4_result', 'Cross-Jurisdictional Precedent')}
+                {renderLayer('layer5_result', 'Defendant Profile Context')}
+              </div>
+
+              {/* Summary & Citations */}
+              <div className="details-split">
+                <div className="summary-card">
+                  <h3 className="summary-title">
+                    <BookOpen size={15} />
+                    Executive Summary
+                  </h3>
+                  <div className="summary-text">{analysis.summary}</div>
+                </div>
+
+                <div className="citations-card">
+                  <h3 className="citations-title">
+                    <Gavel size={15} />
+                    Verified Citations
+                  </h3>
+                  <div className="citations-list custom-scrollbar">
+                    {analysis.citations && analysis.citations.length > 0 ? (
+                      analysis.citations.map((c, i) => (
+                        <div key={i} className="citation-item">
+                          <div className="citation-badge-row">
+                            <span className="citation-badge">L{c.layer}</span>
+                            <span className="citation-type">{c.source_type}</span>
+                          </div>
+                          <a 
+                            href={c.source_url || '#'} 
+                            target="_blank" 
+                            rel="noreferrer" 
+                            className="citation-link" 
+                            title={c.source_title || 'View Source'}
+                          >
+                            {c.source_title || 'View Citation'}
+                          </a>
+                        </div>
+                      ))
+                    ) : (
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.78rem', fontStyle: 'italic' }}>No citations listed.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          )}
+
         </div>
       </div>
+
     </div>
   );
 }

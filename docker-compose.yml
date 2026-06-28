@@ -43,6 +43,8 @@ services:
       - db
       - neo4j
       - redis
+    volumes:
+      - ./justice_data:/app/data
     restart: always
 
   frontend:

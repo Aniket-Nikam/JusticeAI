@@ -24,7 +24,6 @@ def calculate_sentencing_range(counts: list[dict], jurisdiction: str) -> dict:
     cumulative_max = sum(count.get("max_years", 0) for count in counts)
     
     # Highest single count (typical concurrent sentence anchor)
-    highest_min = max(count.get("min_years", 0) for count in counts)
     highest_max = max(count.get("max_years", 0) for count in counts)
 
     # Determine jurisdiction practice
