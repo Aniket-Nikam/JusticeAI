@@ -1,15 +1,15 @@
 import logging
+import json
 from fastapi import FastAPI, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional, Any
 
-# Import Config, DB, and AI Service
-from config import settings
-from database import engine, Base, get_db
-from models.case_model import CaseAnalysis
-from services.ai_service import analyze_case
+from backend.config import settings
+from backend.api.models.base import engine, Base, SessionLocal
+from backend.api.models.schema import Case, Analysis, Citation
+from backend.engine.reasoning_pipeline import ReasoningPipeline
 
 # Setup structured logging
 logging.basicConfig(
@@ -18,82 +18,145 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create Database tables
-Base.metadata.create_all(bind=engine)
+# Initialize DB session
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
-app = FastAPI(title="JusticeAI API")
+app = FastAPI(title="JusticeAI API v2")
 
-# Hardened CORS using environment variable
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_URL], 
+    allow_origins=["*"], # For dev
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Input Validation: Max 10000 chars to prevent DoS
-class CaseRequest(BaseModel):
-    description: str = Field(..., min_length=10, max_length=10000, description="The factual description of the case")
+pipeline = ReasoningPipeline()
 
-class AnalysisResponse(BaseModel):
-    report: str
-
-class CaseHistoryResponse(BaseModel):
-    id: int
+# Pydantic Schemas for API
+class CaseSubmitRequest(BaseModel):
+    jurisdiction: str
+    crime_type: str
+    defendant_profile: str
     description: str
-    report: str
-    timestamp: str
+    counts: List[dict] = []
 
-@app.post("/api/v1/analyze", response_model=AnalysisResponse)
-async def analyze_case_endpoint(request: CaseRequest, db: Session = Depends(get_db)):
-    logger.info("Received analysis request.")
+class AnalysisResponseModel(BaseModel):
+    id: str
+    case_id: str
+    verdict_classification: str
+    confidence_score: int
+    recommended_range_min_months: float
+    recommended_range_max_months: float
+    summary: str
+    layer1_result: Any
+    layer2_result: Any
+    layer3_result: Any
+    layer4_result: Any
+    layer5_result: Any
+    full_reasoning_chain: str
+    citations: List[Any] = []
+
+@app.post("/api/v1/analyze", response_model=AnalysisResponseModel)
+async def analyze_case_endpoint(request: CaseSubmitRequest, db: Session = Depends(get_db)):
+    logger.info("Received analysis request v2.")
     try:
-        # Retrieve past learnings for consistency (fetch last 3 cases)
-        past_cases = db.query(CaseAnalysis).order_by(CaseAnalysis.id.desc()).limit(3).all()
-        previous_learnings = ""
-        if past_cases:
-            previous_learnings = "Here are summaries of the last 3 cases processed for consistency:\n"
-            for c in past_cases:
-                previous_learnings += f"- Case {c.id}: {c.description[:200]}... -> Report Extract: {c.report[:300]}...\n"
-        else:
-            previous_learnings = "No prior cases in the database yet. Establish a baseline."
-
-        # Run the 2-step AI pipeline
-        report = analyze_case(request.description, previous_learnings)
+        # Convert request to dict for pipeline
+        case_dict = request.model_dump()
         
-        # Save to database
-        db_case = CaseAnalysis(description=request.description, report=report)
+        # Run Reasoning Pipeline
+        parsed_result = await pipeline.analyze(case_dict)
+        
+        # Save Case to DB
+        db_case = Case(
+            jurisdiction=request.jurisdiction,
+            crime_type=request.crime_type,
+            crime_description=request.description,
+            defendant_mental_health=request.defendant_profile,
+            status="completed"
+        )
         db.add(db_case)
-        db.commit()
-        db.refresh(db_case)
+        db.flush()
         
-        logger.info(f"Successfully processed and saved Case ID {db_case.id}")
-        return AnalysisResponse(report=report)
+        # Save Analysis to DB
+        db_analysis = Analysis(
+            case_id=db_case.id,
+            confidence_score=parsed_result.get("confidence_score", 0),
+            confidence_breakdown=parsed_result.get("confidence_breakdown", {}),
+            layer1_result=parsed_result.get("layer1_result", {}),
+            layer2_result=parsed_result.get("layer2_result", {}),
+            layer3_result=parsed_result.get("layer3_result", {}),
+            layer4_result=parsed_result.get("layer4_result", {}),
+            layer5_result=parsed_result.get("layer5_result", {}),
+            verdict_classification=parsed_result.get("verdict_classification", "ANOMALOUS"),
+            recommended_range_min_months=parsed_result.get("recommended_range_min_months", 0),
+            recommended_range_max_months=parsed_result.get("recommended_range_max_months", 0),
+            full_reasoning_chain=parsed_result.get("full_reasoning_chain", ""),
+            summary=parsed_result.get("summary", "")
+        )
+        db.add(db_analysis)
+        db.flush()
+        
+        # Save Citations
+        citations = parsed_result.get("citations", [])
+        for cit in citations:
+            db_citation = Citation(
+                analysis_id=db_analysis.id,
+                layer=cit.get("layer", 1),
+                source_url=cit.get("source_url", ""),
+                source_title=cit.get("source_title", ""),
+                source_type=cit.get("source_type", ""),
+                excerpt=cit.get("excerpt", "")
+            )
+            db.add(db_citation)
+        
+        db.commit()
+        db.refresh(db_analysis)
+        
+        response_data = {
+            "id": db_analysis.id,
+            "case_id": db_case.id,
+            "verdict_classification": db_analysis.verdict_classification,
+            "confidence_score": db_analysis.confidence_score,
+            "recommended_range_min_months": db_analysis.recommended_range_min_months,
+            "recommended_range_max_months": db_analysis.recommended_range_max_months,
+            "summary": db_analysis.summary,
+            "layer1_result": db_analysis.layer1_result,
+            "layer2_result": db_analysis.layer2_result,
+            "layer3_result": db_analysis.layer3_result,
+            "layer4_result": db_analysis.layer4_result,
+            "layer5_result": db_analysis.layer5_result,
+            "full_reasoning_chain": db_analysis.full_reasoning_chain,
+            "citations": citations
+        }
+        return response_data
         
     except Exception as e:
-        # ai_service.py already sanitizes the error, so we can pass it to the frontend
         logger.error(f"Analysis failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# Pagination implemented via limit and offset
-@app.get("/api/v1/cases", response_model=List[CaseHistoryResponse])
-async def get_case_history(
-    limit: int = Query(20, ge=1, le=100), 
-    offset: int = Query(0, ge=0), 
-    db: Session = Depends(get_db)
-):
-    cases = db.query(CaseAnalysis).order_by(CaseAnalysis.id.desc()).offset(offset).limit(limit).all()
-    return [{"id": c.id, "description": c.description, "report": c.report, "timestamp": c.timestamp.isoformat()} for c in cases]
-
-@app.delete("/api/v1/cases/{case_id}")
-async def delete_case(case_id: int, db: Session = Depends(get_db)):
-    case = db.query(CaseAnalysis).filter(CaseAnalysis.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    db.delete(case)
-    db.commit()
-    return {"message": "Case deleted successfully"}
+@app.get("/api/v1/cases")
+async def get_case_history(db: Session = Depends(get_db)):
+    # Quick endpoint to fetch history
+    cases = db.query(Case).order_by(Case.submitted_at.desc()).all()
+    res = []
+    for c in cases:
+        # Get first analysis
+        analysis = db.query(Analysis).filter(Analysis.case_id == c.id).first()
+        res.append({
+            "id": c.id,
+            "crime_type": c.crime_type,
+            "jurisdiction": c.jurisdiction,
+            "submitted_at": c.submitted_at.isoformat(),
+            "verdict": analysis.verdict_classification if analysis else "N/A",
+            "confidence": analysis.confidence_score if analysis else 0
+        })
+    return res
 
 if __name__ == "__main__":
     import uvicorn
